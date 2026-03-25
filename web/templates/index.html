@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>智能运维系统平台</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='plugins/fontawesome-free/css/all.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='dist/css/adminlte.min.css') }}">
+</head>
+<body class="hold-transition sidebar-mini">
+<div class="wrapper">
+
+  <aside class="main-sidebar sidebar-dark-primary elevation-4">
+    <div class="sidebar">
+      <div class="user-panel mt-3 pb-3 mb-3 d-flex"><div class="info"><a class="d-block">设备管理列表</a></div></div>
+      <nav class="mt-2">
+        <ul class="nav nav-pills nav-sidebar flex-column" id="deviceList">
+          {% for dev in devices %}
+          <li class="nav-item">
+            <a href="#" class="nav-link" onclick="changeDevice('{{ dev }}')">
+              <i class="nav-icon fas fa-server"></i><p>{{ dev }}</p>
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+      </nav>
+    </div>
+  </aside>
+
+  <div class="content-wrapper p-3">
+    <section class="content">
+      <div class="container-fluid">
+        <div class="row">
+          <div class="col-md-4">
+            <div id="statusCard" class="small-box bg-success" onclick="showSuggestion()" style="cursor: pointer;">
+              <div class="inner">
+                <h3 id="curStatus">正常</h3>
+                <p id="curDevice">当前设备: {{ devices[0] }}</p>
+              </div>
+              <div class="icon"><i class="fas fa-brain"></i></div>
+            </div>
+            <button onclick="exportReport()" class="btn btn-block btn-outline-primary mb-3"><i class="fas fa-file-download"></i> 导出实时诊断报告</button>
+          </div>
+          <div class="col-md-8">
+            <div class="card card-primary"><div class="card-body"><canvas id="mainChart" height="200"></canvas></div></div>
+          </div>
+        </div>
+
+        <div class="row mt-3">
+          <div class="col-12">
+            <div class="card card-dark">
+              <div class="card-header"><h3 class="card-title">AI 历史审计日志</h3></div>
+              <div class="card-body table-responsive p-0">
+                <table class="table table-hover text-nowrap">
+                  <thead><tr><th>时间</th><th>设备</th><th>指标</th><th>状态</th></tr></thead>
+                  <tbody id="logTable"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div class="modal fade" id="suggestModal"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header"><h4 class="modal-title">AI 专家排障建议</h4></div>
+  <div class="modal-body"><p id="suggestText"></p></div>
+</div></div></div>
+
+<script src="{{ url_for('static', filename='plugins/jquery/jquery.min.js') }}"></script>
+<script src="{{ url_for('static', filename='plugins/chart.js/Chart.min.js') }}"></script>
+<script src="{{ url_for('static', filename='dist/js/adminlte.min.js') }}"></script>
+
+<script>
+  let currentDevice = "{{ devices[0] }}";
+  let lastSuggestion = "";
+
+  // 初始化图表
+  const ctx = document.getElementById('mainChart').getContext('2d');
+  const chart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{ label: '负载 (%)', borderColor: '#007bff', data: [] }] }
+  });
+
+  function changeDevice(name) {
+    currentDevice = name;
+    $('#curDevice').text("当前设备: " + name);
+    chart.data.labels = []; chart.data.datasets[0].data = [];
+  }
+
+  function update() {
+    $.getJSON('/api/metrics?device=' + currentDevice, function(data) {
+        if (chart.data.labels.length > 10) { chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
+        chart.data.labels.push(data.time); chart.data.datasets[0].data.push(data.cpu); chart.update();
+
+        $('#curStatus').text(data.status);
+        lastSuggestion = data.suggestion;
+        $('#statusCard').attr('class', data.status === "正常" ? 'small-box bg-success' : 'small-box bg-danger');
+    });
+  }
+
+  function loadLogs() {
+    $.getJSON('/api/logs', function(data) {
+      let html = '';
+      data.forEach(l => {
+        html += `<tr><td>${l.time}</td><td>${l.device}</td><td>${l.val}</td><td><span class="badge bg-${l.level}">${l.type}</span></td></tr>`;
+      });
+      $('#logTable').html(html);
+    });
+  }
+
+  function showSuggestion() {
+    $('#suggestText').text(lastSuggestion);
+    $('#suggestModal').modal('show');
+  }
+
+  function exportReport() {
+    window.location.href = '/api/export_report?device=' + currentDevice;
+  }
+
+  setInterval(update, 3000);
+  loadLogs();
+</script>
+</body>
+</html>

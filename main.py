@@ -1,77 +1,76 @@
 # main.py
 import time
+import logging
 import numpy as np
-from collector.ssh_collector import NetworkDeviceCollector
-from collector.preprocess import DataPreprocessor
-from database.influx_client import InfluxDBManager
+from collector.ssh_collector import NetworkCollector
+from database.influx_client import InfluxDBClient
 from models.anomaly_detector import AnomalyDetector
+from models.diagnosis_model import DiagnosisModel
+from collector.preprocess import FeatureExtractor  # 新增特征工程模块
 
-# 如果你写了诊断模型，也一并引入
-# from models.diagnosis_model import DiagnosisModel
-
-# 1. 初始化配置与实例
-DEVICE_CONFIG = {
-    'device_type': 'huawei',
-    'host': '192.168.1.1',
-    'username': 'admin',
-    'password': 'password123'
-}
-
-# 按照开题报告，使用 InfluxDB 存储指标
-db = InfluxDBManager(token="YOUR_TOKEN", org="YOUR_ORG", bucket="network_data")
-collector = NetworkDeviceCollector(DEVICE_CONFIG)
-preprocessor = DataPreprocessor(window_size=5)
-detector = AnomalyDetector(contamination=0.1)
+# 配置日志记录
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def run_system():
-    print("--- 智能网络运维系统启动 ---")
+def main():
+    logging.info("AIOps System Starting...")
+    collector = NetworkCollector("192.168.1.1", "admin", "pass")
+    db = InfluxDBClient()
+    detector = AnomalyDetector()
+    diagnoser = DiagnosisModel()
+    extractor = FeatureExtractor(window_size=5)  # 5个采集周期的滑动窗口
 
-    # 模拟：实际项目中这里应先从数据库加载历史数据进行模型训练
-    # detector.train(historical_data)
+    # 尝试加载已有模型，若无则使用模拟数据训练（实际应用中应从文件加载）
+    if not detector.load_model('saved_models/iforest.pkl'):
+        dummy_data = np.random.rand(100, 3)
+        detector.train(dummy_data)
+        diagnoser.train(dummy_data, np.random.randint(0, 3, 100))
 
-    while True:
-        try:
-            # 步骤 A: 数据采集
-            cpu_val = collector.get_cpu_data()
-            if cpu_val is None:
-                time.sleep(10)
-                continue
+    try:
+        while True:
+            try:
+                # 1. 采集原始数据
+                raw_data = collector.collect()
+                if not raw_data:
+                    logging.warning("Data collection failed, retrying...")
+                    time.sleep(5)
+                    continue
 
-            # 步骤 B: 构造原始数据并进行预处理
-            # 实际开发中，预处理通常需要一个滑动窗口的列表数据
-            raw_metrics = {"cpu_usage": cpu_val, "mem_usage": 40.0}  # 示例
+                # 2. 特征工程：生成滑动窗口统计特征
+                features = extractor.transform([raw_data['cpu'], raw_data['mem'], raw_data['delay']])
+                if features is None:
+                    # 窗口未满，先存入基础数据，等待下一个周期
+                    db.write_data(raw_data['cpu'], raw_data['mem'], raw_data['delay'], 0, "Normal")
+                    time.sleep(5)
+                    continue
 
-            # 步骤 C: 异常检测 (AI大脑预警)
-            # 将当前特征转为模型需要的 numpy 格式
-            current_feature = np.array([cpu_val, 40.0, cpu_val])  # 示例特征向量
-            is_anomaly = detector.predict(current_feature)
+                feature_array = np.array([features])
 
-            # 步骤 D: 结果处理与自动诊断
-            status = "正常"
-            if is_anomaly == 1:
-                status = "异常告警"
-                print(f"【！数据预警】检测到网络指标异常，当前值: {cpu_val}%")
-                # 此处可调用自动诊断模块：diagnosis = diagnoser.diagnose(current_feature)
-            else:
-                print(f"【监控中】网络运行正常，当前值: {cpu_val}%")
+                # 3. 异常检测预测
+                is_anomaly = detector.predict(feature_array)[0] == 1
+                fault_type = "Normal"
+                diag_log = ""
 
-            # 步骤 E: 数据入库 (供前端可视化展示)
-            data_to_db = {
-                "measurement": "network_status",
-                "tags": {"host": DEVICE_CONFIG['host'], "status": status},
-                "fields": {"cpu_usage": float(cpu_val)},
-                "time": int(time.time())
-            }
-            db.save_metrics(data_to_db)
+                # 4. 故障自动验证闭环
+                if is_anomaly:
+                    fault_type = diagnoser.predict(feature_array)[0]
+                    logging.warning(f"Anomaly Detected! Predicted Fault: {fault_type}")
 
-            # 按照开题报告设定的频率采集（如按分钟级）
-            time.sleep(60)
+                    # 触发 Netmiko 自动执行对应诊断命令抓取现场日志
+                    diag_log = collector.auto_diagnose(fault_type)
+                    logging.info(f"Diagnostic Log Captured:\n{diag_log}")
 
-        except KeyboardInterrupt:
-            print("系统安全退出")
-            break
+                # 5. 存储全量数据及诊断证据
+                db.write_data(raw_data['cpu'], raw_data['mem'], raw_data['delay'], int(is_anomaly), fault_type)
+
+            except Exception as e:
+                logging.error(f"Pipeline Error: {str(e)}")
+
+            time.sleep(5)
+
+    except KeyboardInterrupt:
+        logging.info("System Stopped by User.")
 
 
 if __name__ == "__main__":
-    run_system()
+    main()

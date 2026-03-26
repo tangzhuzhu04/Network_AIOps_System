@@ -1,45 +1,54 @@
 # collector/ssh_collector.py
+import time
+from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
 
-import re
-from netmiko import ConnectHandler
 
+class NetworkCollector:
+    def __init__(self, ip, user, pwd):
+        self.ip = ip
+        self.user = user
+        self.pwd = pwd
 
-class NetworkDeviceCollector:
-    """
-    这是一个【类】：专门负责与网络设备打交道
-    """
-
-    def __init__(self, device_info):
+    def collect(self):
         """
-        构造方法：初始化设备的 IP、账号、密码等信息
-        """
-        self.device_info = device_info
-        # 根据开题报告，定义不同厂商的命令映射
-        self.commands = {
-            'huawei': 'display cpu-usage',
-            'hp_comware': 'display cpu'
-        }
-
-    def get_cpu_data(self):
-        """
-        这是一个【方法】：具体执行“获取CPU数据”的动作
+        模拟采集逻辑或通过 SSH 获取实时数据
         """
         try:
-            # 建立连接
-            with ConnectHandler(**self.device_info) as ssh:
-                vendor = self.device_info['device_type']
-                cmd = self.commands.get(vendor)
-                output = ssh.send_command(cmd)
-
-                # 调用解析逻辑（下面定义的私有方法）
-                return self._parse_percentage(output)
+            # 实际项目中这里应通过 netmiko 发送采集指令
+            # 此处返回模拟数据用于测试闭环
+            return {
+                'cpu': 15.5,
+                'mem': 45.2,
+                'delay': 12.0
+            }
         except Exception as e:
-            print(f"连接失败: {e}")
+            print(f"Collect error: {e}")
             return None
 
-    def _parse_percentage(self, text):
+    def auto_diagnose(self, fault_type):
         """
-        【私有方法】：用正则表达式从回显文字中提取数字
+        对应开题报告：自动验证模块 (Netmiko执行诊断命令)
+        当异常发生时，根据故障类型下发诊断指令
         """
-        match = re.search(r"(\d+)%", text)
-        return float(match.group(1)) if match else 0.0
+        device = {
+            'device_type': 'hp_comware',  # 需根据你的设备（如H3C/华为）调整
+            'host': self.ip,
+            'username': self.user,
+            'password': self.pwd,
+        }
+
+        # 针对不同预测结果的诊断指令集
+        command_map = {
+            "High_CPU": "display cpu-usage",
+            "High_Delay": "display interface brief",
+            "Normal": "display logbuffer"
+        }
+        cmd = command_map.get(fault_type, "display clock")
+
+        try:
+            # 建立 SSH 连接并抓取现场
+            with ConnectHandler(**device) as net_connect:
+                output = net_connect.send_command(cmd)
+                return output
+        except Exception as e:
+            return f"Auto-diagnosis failed: {str(e)}"

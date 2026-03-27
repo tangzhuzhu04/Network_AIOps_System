@@ -1,0 +1,10 @@
+influxdb-client
+netmiko
+scikit-learn
+pandas
+numpy
+joblib
+pyod
+flask
+pytest
+pytest-benchmark

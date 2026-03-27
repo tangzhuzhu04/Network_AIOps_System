@@ -87,6 +87,7 @@
     currentDevice = name;
     $('#curDevice').text("当前设备: " + name);
     chart.data.labels = []; chart.data.datasets[0].data = [];
+    loadLogs(); // 切换设备时实时刷新审计日志
   }
 
   function update() {
@@ -101,7 +102,7 @@
   }
 
   function loadLogs() {
-    $.getJSON('/api/logs', function(data) {
+    $.getJSON('/api/logs?device=' + currentDevice, function(data) {
       let html = '';
       data.forEach(l => {
         html += `<tr><td>${l.time}</td><td>${l.device}</td><td>${l.val}</td><td><span class="badge bg-${l.level}">${l.type}</span></td></tr>`;
@@ -120,6 +121,7 @@
   }
 
   setInterval(update, 3000);
+  setInterval(loadLogs, 7000);
   loadLogs();
 </script>
 </body>

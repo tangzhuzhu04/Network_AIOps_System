@@ -20,6 +20,12 @@ class DiagnosisModel:
         self.model.fit(X_train, y_train)
         print("故障诊断模型训练完成。")
 
+    def predict(self, feature_data):
+        """输入异常特征，输出诊断结论，与 diagnose 方法保持一致以适配 main.py"""
+        # 兼容 main.py 里的 [0] 调用方式
+        res = self.diagnose(feature_data)
+        return [res]
+
     def diagnose(self, feature_data):
         """输入异常特征，输出诊断结论 """
         label = self.model.predict(feature_data.reshape(1, -1))[0]

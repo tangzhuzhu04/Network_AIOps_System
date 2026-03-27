@@ -45,5 +45,13 @@ class AnomalyDetector:
 
     def load_model(self, model_path):
         """加载已有的模型 """
-        self.model = joblib.load(model_path)
-        print("模型加载成功")
+        if not os.path.exists(model_path):
+            print(f"模型文件不存在: {model_path}")
+            return False
+        try:
+            self.model = joblib.load(model_path)
+            print("模型加载成功")
+            return True
+        except Exception as e:
+            print(f"加载模型失败: {e}")
+            return False

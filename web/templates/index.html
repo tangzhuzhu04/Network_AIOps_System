@@ -5,19 +5,47 @@
   <title>智能运维系统平台</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='plugins/fontawesome-free/css/all.min.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='dist/css/adminlte.min.css') }}">
+  <style>
+    body { background: #111827; color: #e5e7eb; }
+    .main-sidebar { background: #0b1220 !important; }
+    .brand-title { font-weight: 600; letter-spacing: 0.5px; }
+    .card { background: #0f172a; border: 1px solid rgba(148, 163, 184, 0.15); }
+    .card-header { border-bottom: 1px solid rgba(148, 163, 184, 0.15); }
+    .card-title { color: #e5e7eb; }
+    .nav-sidebar .nav-link { color: #cbd5e1; }
+    .nav-sidebar .nav-link.active { background: rgba(59, 130, 246, 0.25) !important; color: #ffffff; }
+    .metric-kpi { display: flex; gap: 12px; flex-wrap: wrap; }
+    .kpi { padding: 10px 12px; border-radius: 10px; background: rgba(148, 163, 184, 0.10); border: 1px solid rgba(148, 163, 184, 0.15); min-width: 160px; }
+    .kpi .k { font-size: 12px; color: #94a3b8; }
+    .kpi .v { font-size: 18px; font-weight: 600; color: #e5e7eb; }
+    .chart-wrap { height: 260px; }
+    .alarm { border: 2px solid #ef4444 !important; animation: alarmBlink 1s infinite; }
+    @keyframes alarmBlink { 0% { box-shadow: 0 0 0 rgba(239,68,68,0.0); } 50% { box-shadow: 0 0 18px rgba(239,68,68,0.55); } 100% { box-shadow: 0 0 0 rgba(239,68,68,0.0); } }
+    .table { color: #e5e7eb; }
+    .table thead th { border-color: rgba(148, 163, 184, 0.15); color: #cbd5e1; }
+    .table td, .table th { border-color: rgba(148, 163, 184, 0.10); }
+    iframe { border: 1px solid rgba(148, 163, 184, 0.15); border-radius: 10px; background: #0b1220; }
+  </style>
 </head>
 <body class="hold-transition sidebar-mini">
-<div class="wrapper">
+<div class="wrapper" id="appRoot" data-devices='{{ devices|tojson }}' data-default-device='{{ devices[0].id }}'>
 
   <aside class="main-sidebar sidebar-dark-primary elevation-4">
     <div class="sidebar">
-      <div class="user-panel mt-3 pb-3 mb-3 d-flex"><div class="info"><a class="d-block">设备管理列表</a></div></div>
+      <div class="user-panel mt-3 pb-3 mb-3 d-flex"><div class="info"><a class="d-block brand-title">企业级 AIOps 监控台</a></div></div>
+      <div class="card mx-2">
+        <div class="card-header py-2"><h3 class="card-title mb-0">实时拓扑监控</h3></div>
+        <div class="card-body p-2">
+          <iframe src="http://192.168.12.128:5000" style="width:100%; height:400px;"></iframe>
+        </div>
+      </div>
       <nav class="mt-2">
+        <div class="px-3 pt-2 pb-1" style="color:#94a3b8; font-size:12px;">Mininet 节点列表</div>
         <ul class="nav nav-pills nav-sidebar flex-column" id="deviceList">
           {% for dev in devices %}
           <li class="nav-item">
-            <a href="#" class="nav-link" onclick="changeDevice('{{ dev }}')">
-              <i class="nav-icon fas fa-server"></i><p>{{ dev }}</p>
+            <a href="#" class="nav-link {% if loop.index0 == 0 %}active{% endif %}" onclick="changeDevice('{{ dev.id }}', this)">
+              <i class="nav-icon fas fa-server"></i><p>{{ dev.label }}</p>
             </a>
           </li>
           {% endfor %}
@@ -29,19 +57,52 @@
   <div class="content-wrapper p-3">
     <section class="content">
       <div class="container-fluid">
-        <div class="row">
-          <div class="col-md-4">
-            <div id="statusCard" class="small-box bg-success" onclick="showSuggestion()" style="cursor: pointer;">
-              <div class="inner">
-                <h3 id="curStatus">正常</h3>
-                <p id="curDevice">当前设备: {{ devices[0] }}</p>
+        <div class="row mb-3">
+          <div class="col-12">
+            <div class="card">
+              <div class="card-body d-flex justify-content-between align-items-center flex-wrap" style="gap:12px;">
+                <div>
+                  <div style="color:#94a3b8; font-size:12px;">当前设备</div>
+                  <div style="font-size:20px; font-weight:700;" id="curDeviceText">{{ devices[0].label }}</div>
+                </div>
+                <div class="metric-kpi">
+                  <div class="kpi"><div class="k">AI 状态</div><div class="v" id="curStatus">连接中</div></div>
+                  <div class="kpi"><div class="k">带宽入 / 出</div><div class="v" id="kpiBw">- / -</div></div>
+                  <div class="kpi"><div class="k">平均时延</div><div class="v" id="kpiDelay">-</div></div>
+                  <div class="kpi"><div class="k">丢包率</div><div class="v" id="kpiLoss">-</div></div>
+                </div>
+                <div>
+                  <button onclick="exportReport()" class="btn btn-outline-primary"><i class="fas fa-file-download"></i> 导出实时诊断报告</button>
+                </div>
               </div>
-              <div class="icon"><i class="fas fa-brain"></i></div>
             </div>
-            <button onclick="exportReport()" class="btn btn-block btn-outline-primary mb-3"><i class="fas fa-file-download"></i> 导出实时诊断报告</button>
           </div>
-          <div class="col-md-8">
-            <div class="card card-primary"><div class="card-body"><canvas id="mainChart" height="200"></canvas></div></div>
+        </div>
+
+        <div class="row">
+          <div class="col-lg-6">
+            <div class="card" id="cardBandwidth">
+              <div class="card-header"><h3 class="card-title">带宽监控 (BW_IN / BW_OUT)</h3></div>
+              <div class="card-body"><div id="chartBandwidth" class="chart-wrap"></div></div>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <div class="card" id="cardDelay">
+              <div class="card-header"><h3 class="card-title">网络延迟 (DELAY ms)</h3></div>
+              <div class="card-body"><div id="chartDelay" class="chart-wrap"></div></div>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <div class="card" id="cardResource">
+              <div class="card-header"><h3 class="card-title">资源负载 (CPU / MEM)</h3></div>
+              <div class="card-body"><div id="chartResource" class="chart-wrap"></div></div>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <div class="card" id="cardLoss">
+              <div class="card-header"><h3 class="card-title">丢包监测 (LOSS %)</h3></div>
+              <div class="card-body"><div id="chartLoss" class="chart-wrap"></div></div>
+            </div>
           </div>
         </div>
 
@@ -69,35 +130,195 @@
 </div></div></div>
 
 <script src="{{ url_for('static', filename='plugins/jquery/jquery.min.js') }}"></script>
-<script src="{{ url_for('static', filename='plugins/chart.js/Chart.min.js') }}"></script>
 <script src="{{ url_for('static', filename='dist/js/adminlte.min.js') }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 
 <script>
-  let currentDevice = "{{ devices[0] }}";
-  let lastSuggestion = "";
+  const appRoot = document.getElementById('appRoot');
+  const devices = JSON.parse(appRoot.dataset.devices || '[]');
+  let currentDevice = appRoot.dataset.defaultDevice || (devices[0] && devices[0].id) || 's1';
+  const deviceLabels = {};
+  devices.forEach(d => deviceLabels[d.id] = d.label);
 
-  // 初始化图表
-  const ctx = document.getElementById('mainChart').getContext('2d');
-  const chart = new Chart(ctx, {
-    type: 'line',
-    data: { labels: [], datasets: [{ label: '负载 (%)', borderColor: '#007bff', data: [] }] }
-  });
+  const maxPoints = 60;
+  const times = [];
+  const bwIn = [];
+  const bwOut = [];
+  const delay = [];
+  const cpu = [];
+  const mem = [];
+  const loss = [];
 
-  function changeDevice(name) {
-    currentDevice = name;
-    $('#curDevice').text("当前设备: " + name);
-    chart.data.labels = []; chart.data.datasets[0].data = [];
-    loadLogs(); // 切换设备时实时刷新审计日志
+  const bandwidthChart = echarts.init(document.getElementById('chartBandwidth'));
+  const delayChart = echarts.init(document.getElementById('chartDelay'));
+  const resourceChart = echarts.init(document.getElementById('chartResource'));
+  const lossChart = echarts.init(document.getElementById('chartLoss'));
+
+  function baseAxis() {
+    return {
+      type: 'category',
+      data: times,
+      axisLine: { lineStyle: { color: '#94a3b8' } },
+      axisLabel: { color: '#94a3b8' }
+    };
   }
 
-  function update() {
-    $.getJSON('/api/metrics?device=' + currentDevice, function(data) {
-        if (chart.data.labels.length > 10) { chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
-        chart.data.labels.push(data.time); chart.data.datasets[0].data.push(data.cpu); chart.update();
+  function baseGrid() {
+    return { left: 48, right: 24, top: 26, bottom: 30 };
+  }
 
-        $('#curStatus').text(data.status);
-        lastSuggestion = data.suggestion;
-        $('#statusCard').attr('class', data.status === "正常" ? 'small-box bg-success' : 'small-box bg-danger');
+  function baseTooltip() {
+    return { trigger: 'axis' };
+  }
+
+  function setCharts() {
+    bandwidthChart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: baseTooltip(),
+      grid: baseGrid(),
+      legend: { data: ['BW_IN', 'BW_OUT'], textStyle: { color: '#cbd5e1' } },
+      xAxis: baseAxis(),
+      yAxis: { type: 'value', min: 0, max: 100, axisLabel: { color: '#94a3b8', formatter: '{value} %' }, splitLine: { lineStyle: { color: 'rgba(148,163,184,0.15)' } } },
+      series: [
+        { name: 'BW_IN', type: 'line', showSymbol: false, data: bwIn, lineStyle: { width: 2, color: '#3b82f6' } },
+        { name: 'BW_OUT', type: 'line', showSymbol: false, data: bwOut, lineStyle: { width: 2, color: '#22c55e' } }
+      ]
+    });
+
+    delayChart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: baseTooltip(),
+      grid: baseGrid(),
+      xAxis: baseAxis(),
+      yAxis: { type: 'value', axisLabel: { color: '#94a3b8', formatter: '{value} ms' }, splitLine: { lineStyle: { color: 'rgba(148,163,184,0.15)' } } },
+      series: [{ name: 'DELAY', type: 'line', showSymbol: false, data: delay, lineStyle: { width: 2, color: '#f59e0b' } }]
+    });
+
+    resourceChart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: baseTooltip(),
+      grid: baseGrid(),
+      legend: { data: ['CPU', 'MEM'], textStyle: { color: '#cbd5e1' } },
+      xAxis: baseAxis(),
+      yAxis: { type: 'value', min: 0, max: 100, axisLabel: { color: '#94a3b8', formatter: '{value} %' }, splitLine: { lineStyle: { color: 'rgba(148,163,184,0.15)' } } },
+      series: [
+        { name: 'CPU', type: 'line', showSymbol: false, data: cpu, lineStyle: { width: 2, color: '#a78bfa' } },
+        { name: 'MEM', type: 'line', showSymbol: false, data: mem, lineStyle: { width: 2, color: '#60a5fa' } }
+      ]
+    });
+
+    lossChart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: baseTooltip(),
+      grid: baseGrid(),
+      xAxis: baseAxis(),
+      yAxis: { type: 'value', min: 0, max: 100, axisLabel: { color: '#94a3b8', formatter: '{value} %' }, splitLine: { lineStyle: { color: 'rgba(148,163,184,0.15)' } } },
+      series: [{ name: 'LOSS', type: 'line', showSymbol: false, data: loss, lineStyle: { width: 2, color: '#ef4444' } }]
+    });
+  }
+
+  function pushPoint(t, vBwIn, vBwOut, vDelay, vCpu, vMem, vLoss) {
+    times.push(t);
+    bwIn.push(vBwIn);
+    bwOut.push(vBwOut);
+    delay.push(vDelay);
+    cpu.push(vCpu);
+    mem.push(vMem);
+    loss.push(vLoss);
+
+    if (times.length > maxPoints) {
+      times.shift();
+      bwIn.shift();
+      bwOut.shift();
+      delay.shift();
+      cpu.shift();
+      mem.shift();
+      loss.shift();
+    }
+  }
+
+  function clearAlarms() {
+    $('#cardBandwidth').removeClass('alarm');
+    $('#cardDelay').removeClass('alarm');
+    $('#cardResource').removeClass('alarm');
+    $('#cardLoss').removeClass('alarm');
+  }
+
+  function alarmTarget(faultType) {
+    if (!faultType) return null;
+    if (faultType === 'High_Bandwidth') return '#cardBandwidth';
+    if (faultType === 'High_Delay') return '#cardDelay';
+    if (faultType === 'Packet_Loss') return '#cardLoss';
+    if (faultType === 'High_CPU' || faultType === 'High_Mem') return '#cardResource';
+    return null;
+  }
+
+  function faultBadge(faultType) {
+    if (faultType === 'High_Bandwidth') return { text: faultType, cls: 'badge bg-warning' };
+    if (faultType === 'High_Delay') return { text: faultType, cls: 'badge bg-warning' };
+    if (faultType === 'Packet_Loss') return { text: faultType, cls: 'badge bg-danger' };
+    if (faultType === 'High_CPU') return { text: faultType, cls: 'badge bg-danger' };
+    if (faultType === 'High_Mem') return { text: faultType, cls: 'badge bg-danger' };
+    return { text: faultType || 'Normal', cls: 'badge bg-success' };
+  }
+
+  let lastAnomalySignature = '';
+
+  function appendAnomalyLogRow(payload) {
+    const signature = `${payload.time}|${currentDevice}|${payload.fault_type}|${payload.cpu}|${payload.mem}|${payload.delay}|${payload.bw_in}|${payload.bw_out}|${payload.loss}`;
+    if (signature === lastAnomalySignature) return;
+    lastAnomalySignature = signature;
+
+    const badge = faultBadge(payload.fault_type);
+    const metricText = `CPU ${Number(payload.cpu).toFixed(1)}% / MEM ${Number(payload.mem).toFixed(1)}% / ` +
+      `DELAY ${Number(payload.delay).toFixed(1)}ms / BW ${Number(payload.bw_in).toFixed(1)}%|${Number(payload.bw_out).toFixed(1)}% / ` +
+      `LOSS ${Number(payload.loss).toFixed(2)}%`;
+
+    const row = `<tr>
+      <td>${new Date().toISOString().slice(0, 19).replace('T', ' ')}</td>
+      <td>${payload.device_label}</td>
+      <td>${metricText}</td>
+      <td><span class="${badge.cls}">${badge.text}</span></td>
+    </tr>`;
+
+    $('#logTable').prepend(row);
+  }
+
+  function updateMetrics() {
+    $.getJSON('/api/metrics?device=' + currentDevice, function(data) {
+      const t = data.time || new Date().toLocaleTimeString();
+      const vBwIn = Number(data.bw_in ?? data.bandwidth_in_util ?? 0);
+      const vBwOut = Number(data.bw_out ?? data.bandwidth_out_util ?? 0);
+      const vDelay = Number(data.delay ?? 0);
+      const vCpu = Number(data.cpu ?? 0);
+      const vMem = Number(data.mem ?? 0);
+      const vLoss = Number(data.loss ?? data.packet_loss_pct ?? 0);
+
+      pushPoint(t, vBwIn, vBwOut, vDelay, vCpu, vMem, vLoss);
+      setCharts();
+
+      $('#curDeviceText').text(deviceLabels[currentDevice] || currentDevice);
+      $('#curStatus').text((data.is_anomaly === 1 || data.is_anomaly === true) ? '异常' : (data.status || '正常'));
+      $('#kpiBw').text(`${vBwIn.toFixed(1)}% / ${vBwOut.toFixed(1)}%`);
+      $('#kpiDelay').text(`${vDelay.toFixed(1)} ms`);
+      $('#kpiLoss').text(`${vLoss.toFixed(2)} %`);
+
+      clearAlarms();
+      if (Number(data.is_anomaly || 0) === 1) {
+        const target = alarmTarget(data.fault_type);
+        if (target) $(target).addClass('alarm');
+        appendAnomalyLogRow({
+          time: t,
+          device_label: deviceLabels[currentDevice] || currentDevice,
+          cpu: vCpu,
+          mem: vMem,
+          delay: vDelay,
+          bw_in: vBwIn,
+          bw_out: vBwOut,
+          loss: vLoss,
+          fault_type: data.fault_type
+        });
+      }
     });
   }
 
@@ -111,16 +332,37 @@
     });
   }
 
-  function showSuggestion() {
-    $('#suggestText').text(lastSuggestion);
-    $('#suggestModal').modal('show');
-  }
-
   function exportReport() {
     window.location.href = '/api/export_report?device=' + currentDevice;
   }
 
-  setInterval(update, 3000);
+  function changeDevice(id, el) {
+    currentDevice = id;
+    $('#curDeviceText').text(deviceLabels[currentDevice] || currentDevice);
+    $('#deviceList .nav-link').removeClass('active');
+    if (el) $(el).addClass('active');
+
+    times.length = 0;
+    bwIn.length = 0;
+    bwOut.length = 0;
+    delay.length = 0;
+    cpu.length = 0;
+    mem.length = 0;
+    loss.length = 0;
+    lastAnomalySignature = '';
+    setCharts();
+    loadLogs();
+  }
+
+  window.addEventListener('resize', function() {
+    bandwidthChart.resize();
+    delayChart.resize();
+    resourceChart.resize();
+    lossChart.resize();
+  });
+
+  setCharts();
+  setInterval(updateMetrics, 2000);
   setInterval(loadLogs, 7000);
   loadLogs();
 </script>

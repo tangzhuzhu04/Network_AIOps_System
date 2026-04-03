@@ -20,13 +20,12 @@ from database.influx_client import InfluxDBClient
 app = Flask(__name__)
 db = InfluxDBClient()
 
-# 模拟设备列表与 IP 映射
-DEVICE_MAP = {
-    "Huawei-S5700": "192.168.1.1",
-    "H3C-S5130": "192.168.1.2",
-    "Home-Router": "192.168.1.3"
-}
-DEVICE_LIST = list(DEVICE_MAP.keys())
+DEVICE_LIST = [
+    {"id": "s1", "label": "核心交换机 (s1)"},
+    {"id": "s2", "label": "办公区接入 (s2)"},
+    {"id": "s3", "label": "服务器区接入 (s3)"},
+]
+DEVICE_MAP = {d["id"]: d["id"] for d in DEVICE_LIST}
 
 
 @app.route('/')
@@ -36,14 +35,20 @@ def index():
 
 @app.route('/api/metrics')
 def get_metrics():
-    device_name = request.args.get('device', DEVICE_LIST[0])
-    target_ip = DEVICE_MAP.get(device_name, "192.168.1.1")
+    default_device = DEVICE_LIST[0]["id"]
+    device_id = request.args.get('device', default_device)
+    target_host = DEVICE_MAP.get(device_id, default_device)
     
     # 尝试从 InfluxDB 获取真实数据 (增加 host 过滤)
-    real_data = db.query_latest_data(host=target_ip)
+    real_data = db.query_latest_data(host=target_host)
     
     if real_data and 'cpu_usage' in real_data:
         cpu_val = real_data.get('cpu_usage', 0)
+        mem_val = real_data.get('mem_usage', 0)
+        delay_val = real_data.get('delay', 0)
+        bw_in = real_data.get('bandwidth_in_util', 0)
+        bw_out = real_data.get('bandwidth_out_util', 0)
+        loss = real_data.get('packet_loss_pct', 0)
         is_anomaly = real_data.get('is_anomaly', 0)
         fault_type = real_data.get('fault_type', "正常")
         
@@ -53,6 +58,11 @@ def get_metrics():
     else:
         # 更加明显的提示
         cpu_val = 0.0 
+        mem_val = 0.0
+        delay_val = 0.0
+        bw_in = 0.0
+        bw_out = 0.0
+        loss = 0.0
         status = "连接中"
         diagnosis = "数据库尚未接收到数据..."
         suggestion = "请确认 main.py 正在运行且数据库中有记录。"
@@ -60,33 +70,58 @@ def get_metrics():
     return jsonify({
         "time": time.strftime("%H:%M:%S"),
         "cpu": cpu_val,
+        "mem": mem_val,
+        "delay": delay_val,
+        "bandwidth_in_util": bw_in,
+        "bandwidth_out_util": bw_out,
+        "packet_loss_pct": loss,
+        "bw_in": bw_in,
+        "bw_out": bw_out,
+        "loss": loss,
+        "is_anomaly": int(is_anomaly or 0),
+        "fault_type": fault_type,
         "status": status,
         "diagnosis": diagnosis,
         "suggestion": suggestion
     })
 
 
+@app.route("/api/timeseries")
+def get_timeseries():
+    default_device = DEVICE_LIST[0]["id"]
+    device_id = request.args.get("device", default_device)
+    target_host = DEVICE_MAP.get(device_id, default_device)
+    minutes = int(request.args.get("minutes", 10))
+    limit = int(request.args.get("limit", 300))
+    fields_arg = request.args.get("fields", "")
+    fields = [f.strip() for f in fields_arg.split(",") if f.strip()] or None
+    series = db.query_timeseries(host=target_host, minutes=minutes, limit=limit, fields=fields)
+    return jsonify(series)
+
+
 @app.route('/api/logs')
 def get_logs():
-    device_name = request.args.get('device', DEVICE_LIST[0])
-    target_ip = DEVICE_MAP.get(device_name, "192.168.1.1")
+    default_device = DEVICE_LIST[0]["id"]
+    device_id = request.args.get('device', default_device)
+    target_host = DEVICE_MAP.get(device_id, default_device)
 
     # 返回最近的采集记录（包含正常/异常），这样“当前正常”与“历史异常”能同时看到
-    logs = db.query_recent_logs(limit=10, host=target_ip)
+    logs = db.query_recent_logs(limit=10, host=target_host)
 
     if not logs:
-        logs = [{"time": time.strftime("%Y-%m-%d %H:%M:%S"), "device": target_ip, "val": "-", "type": "暂无记录", "level": "success"}]
+        logs = [{"time": time.strftime("%Y-%m-%d %H:%M:%S"), "device": target_host, "val": "-", "type": "暂无记录", "level": "success"}]
 
     return jsonify(logs)
 
 
 @app.route('/api/export_report')
 def export_report():
-    device = request.args.get('device', DEVICE_LIST[0])
-    target_ip = DEVICE_MAP.get(device, "192.168.1.1")
+    default_device = DEVICE_LIST[0]["id"]
+    device_id = request.args.get('device', default_device)
+    target_host = DEVICE_MAP.get(device_id, default_device)
 
-    latest = db.query_latest_data(host=target_ip) or {}
-    stats = db.query_stats(host=target_ip, hours=1)
+    latest = db.query_latest_data(host=target_host) or {}
+    stats = db.query_stats(host=target_host, hours=1)
 
     avg_val = stats.get("avg")
     peak_val = stats.get("max")
@@ -102,7 +137,7 @@ def export_report():
        小型网络智能运维系统 - 自动化诊断报告
 ================================================
 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}
-受测设备: {device}
+受测设备: {device_id}
 ------------------------------------------------
 一、 运行指标统计 (过去 1 小时)
 1. 平均负载: {avg_load}

@@ -20,10 +20,12 @@ def main():
     config = configparser.ConfigParser()
     config.read('config.ini')
     device_config = config['network_device']
+    use_ai_logic = config.getboolean("pipeline", "use_ai_logic", fallback=True)
 
     collector = NetworkCollector(device_config.get('ip'), 
                                device_config.get('user'), 
-                               device_config.get('password'))
+                               device_config.get('password'),
+                               use_ai_logic=use_ai_logic)
     
     # 定义多个模拟设备 IP
     virtual_devices = [
@@ -31,7 +33,7 @@ def main():
         {"ip": "192.168.1.2", "name": "H3C-S5130"},
         {"ip": "192.168.1.3", "name": "Home-Router"}
     ]
-    collectors = [NetworkCollector(d['ip'], "admin", "pass") for d in virtual_devices]
+    collectors = [NetworkCollector(d['ip'], "admin", "pass", use_ai_logic=use_ai_logic) for d in virtual_devices]
     
     db = InfluxDBClient()
     detector = AnomalyDetector()
@@ -59,40 +61,82 @@ def main():
                         logging.warning(f"Device {collector.ip} collection failed.")
                         continue
 
-                    # 2. 特征工程：生成滑动窗口统计特征
-                    if collector.ip not in extractor_map:
-                        extractor_map[collector.ip] = FeatureExtractor(window_size=5)
-                    features = extractor_map[collector.ip].transform([raw_data['cpu'], raw_data['mem'], raw_data['delay']])
-                    logging.info(f"Device {collector.ip} raw metrics -> CPU:{raw_data['cpu']} MEM:{raw_data['mem']} DELAY:{raw_data['delay']}")
-                    if features is None:
-                        # 窗口未满，先存入基础数据
-                        db.write_data(raw_data['cpu'], raw_data['mem'], raw_data['delay'], 0, "Normal", host=collector.ip)
-                        continue
+                    delay_val = raw_data.get("avg_delay_ms", raw_data.get("delay", 0))
+                    bw_in = raw_data.get("bandwidth_in_util", None)
+                    bw_out = raw_data.get("bandwidth_out_util", None)
+                    loss = raw_data.get("packet_loss_pct", None)
 
-                    feature_array = np.array([features])
+                    if not collector.use_ai_logic:
+                        is_anomaly = int(raw_data.get("is_anomaly", 0) or 0)
+                        fault_type = raw_data.get("fault_type", "Normal")
+                        logging.info(
+                            f"Device {collector.ip} raw metrics -> CPU:{raw_data['cpu']} MEM:{raw_data['mem']} "
+                            f"DELAY:{delay_val} BW_IN:{bw_in} BW_OUT:{bw_out} LOSS:{loss}"
+                        )
+                        if is_anomaly:
+                            logging.warning(f"Device {collector.ip} Anomaly! Baseline Triggered: {fault_type}")
+                            collector.auto_diagnose(fault_type)
+                    else:
+                        # 2. 特征工程：生成滑动窗口统计特征
+                        if collector.ip not in extractor_map:
+                            extractor_map[collector.ip] = FeatureExtractor(window_size=5)
+                        features = extractor_map[collector.ip].transform([raw_data['cpu'], raw_data['mem'], delay_val])
+                        logging.info(
+                            f"Device {collector.ip} raw metrics -> CPU:{raw_data['cpu']} MEM:{raw_data['mem']} "
+                            f"DELAY:{delay_val} BW_IN:{bw_in} BW_OUT:{bw_out} LOSS:{loss}"
+                        )
+                        if features is None:
+                            db.write_data(
+                                raw_data["cpu"],
+                                raw_data["mem"],
+                                delay_val,
+                                0,
+                                "Normal",
+                                host=collector.ip,
+                                bandwidth_in_util=bw_in,
+                                bandwidth_out_util=bw_out,
+                                packet_loss_pct=loss,
+                            )
+                            continue
 
-                    # 3. 异常检测预测 + 规则兜底
-                    is_anomaly = detector.predict(feature_array) == 1
+                        feature_array = np.array([features])
 
-                    # 基于实时原始值的规则增强，确保演示可见
-                    rule_fault = None
-                    if raw_data['cpu'] > 70:
-                        is_anomaly = True
-                        rule_fault = "High_CPU"
-                    elif raw_data['delay'] > 80:
-                        is_anomaly = True
-                        rule_fault = "High_Delay"
+                        # 3. 异常检测预测 + 规则兜底
+                        is_anomaly = detector.predict(feature_array) == 1
 
-                    fault_type = "Normal"
-                    if is_anomaly:
-                        # 若规则触发则优先采用规则类型，否则走模型诊断
-                        fault_type = rule_fault or diagnoser.predict(feature_array)[0]
-                        logging.warning(f"Device {collector.ip} Anomaly! Predicted: {fault_type}")
-                        collector.auto_diagnose(fault_type)
+                        rule_fault = None
+                        if raw_data["cpu"] > 70:
+                            is_anomaly = True
+                            rule_fault = "High_CPU"
+                        elif delay_val > 80:
+                            is_anomaly = True
+                            rule_fault = "High_Delay"
+                        elif (loss is not None) and float(loss) > 1.0:
+                            is_anomaly = True
+                            rule_fault = "Packet_Loss"
+
+                        fault_type = "Normal"
+                        if is_anomaly:
+                            fault_type = rule_fault or diagnoser.predict(feature_array)[0]
+                            logging.warning(f"Device {collector.ip} Anomaly! Predicted: {fault_type}")
+                            collector.auto_diagnose(fault_type)
 
                     # 5. 存储全量数据
-                    db.write_data(raw_data['cpu'], raw_data['mem'], raw_data['delay'], int(is_anomaly), fault_type, host=collector.ip)
-                    logging.info(f"Device {collector.ip} write -> CPU:{raw_data['cpu']} is_anomaly:{int(is_anomaly)} fault:{fault_type}")
+                    db.write_data(
+                        raw_data["cpu"],
+                        raw_data["mem"],
+                        delay_val,
+                        int(is_anomaly),
+                        fault_type,
+                        host=collector.ip,
+                        bandwidth_in_util=bw_in,
+                        bandwidth_out_util=bw_out,
+                        packet_loss_pct=loss,
+                    )
+                    logging.info(
+                        f"Device {collector.ip} write -> CPU:{raw_data['cpu']} is_anomaly:{int(is_anomaly)} "
+                        f"fault:{fault_type} BW_IN:{bw_in} BW_OUT:{bw_out} LOSS:{loss}"
+                    )
 
                 except Exception as e:
                     logging.error(f"Pipeline Error on {collector.ip}: {str(e)}")

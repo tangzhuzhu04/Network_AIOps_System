@@ -47,6 +47,43 @@ class InfluxDBClient:
             print(f"查询设备 {host} 失败: {e}")
             return None
 
+    def query_timeseries(self, host="192.168.1.1", minutes=10, limit=300, fields=None):
+        selected_fields = fields or [
+            "cpu_usage",
+            "mem_usage",
+            "delay",
+            "bandwidth_in_util",
+            "bandwidth_out_util",
+            "packet_loss_pct",
+            "is_anomaly",
+            "fault_type",
+        ]
+        field_filters = " or ".join([f'r["_field"] == "{f}"' for f in selected_fields])
+        query = f'''
+        from(bucket: "{self.bucket}")
+        |> range(start: -{int(minutes)}m)
+        |> filter(fn: (r) => r["_measurement"] == "network_metrics")
+        |> filter(fn: (r) => r["host"] == "{host}")
+        |> filter(fn: (r) => {field_filters})
+        |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        |> sort(columns: ["_time"], desc: false)
+        |> limit(n: {int(limit)})
+        '''
+        try:
+            tables = self.query_api.query(query, org=self.client.org)
+            series = []
+            for table in tables:
+                for record in table.records:
+                    row = {"time": record.get_time().strftime("%Y-%m-%d %H:%M:%S")}
+                    for f in selected_fields:
+                        if f in record.values:
+                            row[f] = record.values.get(f)
+                    series.append(row)
+            return series
+        except Exception as e:
+            print(f"查询时序数据失败: {e}")
+            return []
+
     def query_anomaly_logs(self, limit=10, host=None):
         """
         查询最近的异常记录用于审计日志展示
@@ -148,7 +185,18 @@ class InfluxDBClient:
             print(f"查询统计失败: {e}")
             return {"avg": None, "max": None}
 
-    def write_data(self, cpu, mem, delay, is_anomaly, fault_type, host="192.168.1.1"):
+    def write_data(
+        self,
+        cpu,
+        mem,
+        delay,
+        is_anomaly,
+        fault_type,
+        host="192.168.1.1",
+        bandwidth_in_util=None,
+        bandwidth_out_util=None,
+        packet_loss_pct=None,
+    ):
         """
         【方法】：将采集到的数据点位写入 InfluxDB
         """
@@ -161,6 +209,13 @@ class InfluxDBClient:
                 .field("is_anomaly", int(is_anomaly)) \
                 .field("fault_type", str(fault_type)) \
                 .time(datetime.utcnow(), WritePrecision.NS)
+
+            if bandwidth_in_util is not None:
+                point = point.field("bandwidth_in_util", float(bandwidth_in_util))
+            if bandwidth_out_util is not None:
+                point = point.field("bandwidth_out_util", float(bandwidth_out_util))
+            if packet_loss_pct is not None:
+                point = point.field("packet_loss_pct", float(packet_loss_pct))
 
             self.write_api.write(bucket=self.bucket, record=point)
             return True
@@ -176,9 +231,20 @@ class InfluxDBClient:
             point = Point(data_dict["measurement"]) \
                 .tag("host", data_dict["tags"]["host"]) \
                 .tag("vendor", data_dict["tags"]["vendor"]) \
-                .field("cpu_usage", data_dict["fields"]["cpu_usage"]) \
-                .field("mem_usage", data_dict["fields"]["mem_usage"]) \
                 .time(data_dict["time"], WritePrecision.S)
+
+            fields = data_dict.get("fields") or {}
+            for key, value in fields.items():
+                if value is None:
+                    continue
+                if isinstance(value, bool):
+                    point = point.field(key, int(value))
+                elif isinstance(value, int):
+                    point = point.field(key, int(value))
+                elif isinstance(value, float):
+                    point = point.field(key, float(value))
+                else:
+                    point = point.field(key, str(value))
 
             self.write_api.write(bucket=self.bucket, record=point)
             return True

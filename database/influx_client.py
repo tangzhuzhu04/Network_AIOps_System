@@ -5,6 +5,14 @@ import configparser
 from influxdb_client import InfluxDBClient as InfluxLibClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from datetime import datetime
+import sys
+
+
+def _to_ascii(value):
+    try:
+        return str(value).encode("ascii", "backslashreplace").decode("ascii")
+    except Exception:
+        return "<unprintable>"
 
 
 class InfluxDBClient:
@@ -41,10 +49,12 @@ class InfluxDBClient:
                 for record in table.records:
                     result[record.get_field()] = record.get_value()
             if result:
-                print(f"成功获取设备 {host} 最新数据: CPU={result.get('cpu_usage')}%")
+                sys.stdout.write(
+                    f"Latest data fetched: host={_to_ascii(host)} cpu={_to_ascii(result.get('cpu_usage'))}\n"
+                )
             return result
         except Exception as e:
-            print(f"查询设备 {host} 失败: {e}")
+            sys.stdout.write(f"Query latest failed: host={_to_ascii(host)} err={_to_ascii(e)}\n")
             return None
 
     def query_timeseries(self, host="192.168.1.1", minutes=10, limit=300, fields=None):
@@ -81,7 +91,7 @@ class InfluxDBClient:
                     series.append(row)
             return series
         except Exception as e:
-            print(f"查询时序数据失败: {e}")
+            sys.stdout.write(f"Query timeseries failed: err={_to_ascii(e)}\n")
             return []
 
     def query_anomaly_logs(self, limit=10, host=None):
@@ -91,10 +101,14 @@ class InfluxDBClient:
         host_filter = f'|> filter(fn: (r) => r["host"] == "{host}")' if host else ""
         query = f'''
         from(bucket: "{self.bucket}")
-        |> range(start: -24h)
+        |> range(start: -2h)
         |> filter(fn: (r) => r["_measurement"] == "network_metrics")
         {host_filter}
-        |> filter(fn: (r) => r["_field"] == "is_anomaly" or r["_field"] == "fault_type" or r["_field"] == "cpu_usage")
+        |> filter(fn: (r) =>
+            r["_field"] == "is_anomaly" or r["_field"] == "fault_type" or
+            r["_field"] == "cpu_usage" or r["_field"] == "mem_usage" or r["_field"] == "delay" or
+            r["_field"] == "bandwidth_in_util" or r["_field"] == "bandwidth_out_util" or r["_field"] == "packet_loss_pct"
+        )
         |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         |> filter(fn: (r) => r["is_anomaly"] == 1)
         |> sort(columns: ["_time"], desc: true)
@@ -105,16 +119,22 @@ class InfluxDBClient:
             logs = []
             for table in tables:
                 for record in table.records:
+                    cpu = float(record.values.get("cpu_usage", 0) or 0)
+                    mem = float(record.values.get("mem_usage", 0) or 0)
+                    delay = float(record.values.get("delay", 0) or 0)
+                    bw_in = float(record.values.get("bandwidth_in_util", 0) or 0)
+                    bw_out = float(record.values.get("bandwidth_out_util", 0) or 0)
+                    loss = float(record.values.get("packet_loss_pct", 0) or 0)
                     logs.append({
                         "time": record.get_time().strftime("%Y-%m-%d %H:%M:%S"),
                         "device": record.values.get("host", "Unknown"),
-                        "val": f"{record.values.get('cpu_usage', 0)}%",
+                        "val": f"CPU {cpu:.1f}% / MEM {mem:.1f}% / DELAY {delay:.1f}ms / BW {bw_in:.1f}%|{bw_out:.1f}% / LOSS {loss:.2f}%",
                         "type": record.values.get("fault_type", "未知异常"),
                         "level": "danger"
                     })
             return logs
         except Exception as e:
-            print(f"查询异常日志失败: {e}")
+            sys.stdout.write(f"Query anomaly logs failed: err={_to_ascii(e)}\n")
             return []
 
     def query_recent_logs(self, limit=10, host=None):
@@ -122,10 +142,14 @@ class InfluxDBClient:
         host_filter = f'|> filter(fn: (r) => r["host"] == "{host}")' if host else ""
         query = f'''
         from(bucket: "{self.bucket}")
-        |> range(start: -24h)
+        |> range(start: -2h)
         |> filter(fn: (r) => r["_measurement"] == "network_metrics")
         {host_filter}
-        |> filter(fn: (r) => r["_field"] == "is_anomaly" or r["_field"] == "fault_type" or r["_field"] == "cpu_usage")
+        |> filter(fn: (r) =>
+            r["_field"] == "is_anomaly" or r["_field"] == "fault_type" or
+            r["_field"] == "cpu_usage" or r["_field"] == "mem_usage" or r["_field"] == "delay" or
+            r["_field"] == "bandwidth_in_util" or r["_field"] == "bandwidth_out_util" or r["_field"] == "packet_loss_pct"
+        )
         |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         |> sort(columns: ["_time"], desc: true)
         |> limit(n: {limit})
@@ -137,16 +161,22 @@ class InfluxDBClient:
                 for record in table.records:
                     is_anomaly = int(record.values.get("is_anomaly", 0) or 0)
                     fault_type = record.values.get("fault_type", "正常")
+                    cpu = float(record.values.get("cpu_usage", 0) or 0)
+                    mem = float(record.values.get("mem_usage", 0) or 0)
+                    delay = float(record.values.get("delay", 0) or 0)
+                    bw_in = float(record.values.get("bandwidth_in_util", 0) or 0)
+                    bw_out = float(record.values.get("bandwidth_out_util", 0) or 0)
+                    loss = float(record.values.get("packet_loss_pct", 0) or 0)
                     logs.append({
                         "time": record.get_time().strftime("%Y-%m-%d %H:%M:%S"),
                         "device": record.values.get("host", "Unknown"),
-                        "val": f"{record.values.get('cpu_usage', 0)}%",
+                        "val": f"CPU {cpu:.1f}% / MEM {mem:.1f}% / DELAY {delay:.1f}ms / BW {bw_in:.1f}%|{bw_out:.1f}% / LOSS {loss:.2f}%",
                         "type": fault_type if is_anomaly == 1 else "正常",
-                        "level": "danger" if is_anomaly == 1 else "success"
+                        "level": "danger" if is_anomaly == 1 else "success",
                     })
             return logs
         except Exception as e:
-            print(f"查询最近日志失败: {e}")
+            sys.stdout.write(f"Query recent logs failed: err={_to_ascii(e)}\n")
             return []
 
     def query_stats(self, host="192.168.1.1", hours=1):
@@ -182,7 +212,7 @@ class InfluxDBClient:
                     max_val = r.get_value()
             return {"avg": avg_val, "max": max_val}
         except Exception as e:
-            print(f"查询统计失败: {e}")
+            sys.stdout.write(f"Query stats failed: err={_to_ascii(e)}\n")
             return {"avg": None, "max": None}
 
     def write_data(
@@ -220,7 +250,7 @@ class InfluxDBClient:
             self.write_api.write(bucket=self.bucket, record=point)
             return True
         except Exception as e:
-            print(f"写入数据库失败: {e}")
+            sys.stdout.write(f"Write failed: err={_to_ascii(e)}\n")
             return False
 
     def save_metrics(self, data_dict):
@@ -249,5 +279,5 @@ class InfluxDBClient:
             self.write_api.write(bucket=self.bucket, record=point)
             return True
         except Exception as e:
-            print(f"写入数据库失败: {e}")
+            sys.stdout.write(f"Write failed: err={_to_ascii(e)}\n")
             return False

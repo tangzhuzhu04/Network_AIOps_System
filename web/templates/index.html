@@ -28,7 +28,7 @@
   </style>
 </head>
 <body class="hold-transition sidebar-mini">
-<div class="wrapper" id="appRoot" data-devices='{{ devices|tojson }}' data-default-device='{{ devices[0].id }}'>
+<div class="wrapper" id="appRoot" data-devices='{{ devices|tojson }}' data-default-device='{{ devices[0].id }}' data-topology-url='{{ topology_url }}'>
 
   <aside class="main-sidebar sidebar-dark-primary elevation-4">
     <div class="sidebar">
@@ -36,7 +36,11 @@
       <div class="card mx-2">
         <div class="card-header py-2"><h3 class="card-title mb-0">实时拓扑监控</h3></div>
         <div class="card-body p-2">
-          <iframe src="http://192.168.12.128:5000" style="width:100%; height:400px;"></iframe>
+          <iframe id="topologyFrame" src="{{ topology_url }}" style="width:100%; height:400px;"></iframe>
+          <div class="pt-2" style="font-size:12px; color:#94a3b8;">
+            <a id="topologyLink" href="{{ topology_url }}" target="_blank" style="color:#60a5fa;">新窗口打开拓扑</a>
+            <span class="pl-2" id="topologyHint"></span>
+          </div>
         </div>
       </div>
       <nav class="mt-2">
@@ -64,6 +68,7 @@
                 <div>
                   <div style="color:#94a3b8; font-size:12px;">当前设备</div>
                   <div style="font-size:20px; font-weight:700;" id="curDeviceText">{{ devices[0].label }}</div>
+                  <div style="color:#94a3b8; font-size:12px;" id="apiHint"></div>
                 </div>
                 <div class="metric-kpi">
                   <div class="kpi"><div class="k">AI 状态</div><div class="v" id="curStatus">连接中</div></div>
@@ -139,6 +144,24 @@
   let currentDevice = appRoot.dataset.defaultDevice || (devices[0] && devices[0].id) || 's1';
   const deviceLabels = {};
   devices.forEach(d => deviceLabels[d.id] = d.label);
+  const topologyUrl = appRoot.dataset.topologyUrl || '';
+  const topologyHintEl = document.getElementById('topologyHint');
+  const topologyLinkEl = document.getElementById('topologyLink');
+  const apiHintEl = document.getElementById('apiHint');
+
+  if (topologyLinkEl && topologyUrl) {
+    topologyLinkEl.href = topologyUrl;
+  }
+  const topologyFrameEl = document.getElementById('topologyFrame');
+  if (topologyHintEl && topologyFrameEl) {
+    const timer = setTimeout(function() {
+      topologyHintEl.textContent = '拓扑服务可能不可达或拒绝被嵌入，可点击“新窗口打开拓扑”。';
+    }, 2500);
+    topologyFrameEl.addEventListener('load', function() {
+      clearTimeout(timer);
+      topologyHintEl.textContent = '';
+    });
+  }
 
   const maxPoints = 60;
   const times = [];
@@ -262,30 +285,9 @@
     return { text: faultType || 'Normal', cls: 'badge bg-success' };
   }
 
-  let lastAnomalySignature = '';
-
-  function appendAnomalyLogRow(payload) {
-    const signature = `${payload.time}|${currentDevice}|${payload.fault_type}|${payload.cpu}|${payload.mem}|${payload.delay}|${payload.bw_in}|${payload.bw_out}|${payload.loss}`;
-    if (signature === lastAnomalySignature) return;
-    lastAnomalySignature = signature;
-
-    const badge = faultBadge(payload.fault_type);
-    const metricText = `CPU ${Number(payload.cpu).toFixed(1)}% / MEM ${Number(payload.mem).toFixed(1)}% / ` +
-      `DELAY ${Number(payload.delay).toFixed(1)}ms / BW ${Number(payload.bw_in).toFixed(1)}%|${Number(payload.bw_out).toFixed(1)}% / ` +
-      `LOSS ${Number(payload.loss).toFixed(2)}%`;
-
-    const row = `<tr>
-      <td>${new Date().toISOString().slice(0, 19).replace('T', ' ')}</td>
-      <td>${payload.device_label}</td>
-      <td>${metricText}</td>
-      <td><span class="${badge.cls}">${badge.text}</span></td>
-    </tr>`;
-
-    $('#logTable').prepend(row);
-  }
-
   function updateMetrics() {
     $.getJSON('/api/metrics?device=' + currentDevice, function(data) {
+      if (apiHintEl) apiHintEl.textContent = '';
       const t = data.time || new Date().toLocaleTimeString();
       const vBwIn = Number(data.bw_in ?? data.bandwidth_in_util ?? 0);
       const vBwOut = Number(data.bw_out ?? data.bandwidth_out_util ?? 0);
@@ -307,18 +309,10 @@
       if (Number(data.is_anomaly || 0) === 1) {
         const target = alarmTarget(data.fault_type);
         if (target) $(target).addClass('alarm');
-        appendAnomalyLogRow({
-          time: t,
-          device_label: deviceLabels[currentDevice] || currentDevice,
-          cpu: vCpu,
-          mem: vMem,
-          delay: vDelay,
-          bw_in: vBwIn,
-          bw_out: vBwOut,
-          loss: vLoss,
-          fault_type: data.fault_type
-        });
+        loadLogs();
       }
+    }).fail(function(jqXHR) {
+      if (apiHintEl) apiHintEl.textContent = `API 获取失败: /api/metrics (${jqXHR.status || 0})`;
     });
   }
 
@@ -326,7 +320,8 @@
     $.getJSON('/api/logs?device=' + currentDevice, function(data) {
       let html = '';
       data.forEach(l => {
-        html += `<tr><td>${l.time}</td><td>${l.device}</td><td>${l.val}</td><td><span class="badge bg-${l.level}">${l.type}</span></td></tr>`;
+        const devLabel = deviceLabels[l.device] || l.device;
+        html += `<tr><td>${l.time}</td><td>${devLabel}</td><td>${l.val}</td><td><span class="badge bg-${l.level}">${l.type}</span></td></tr>`;
       });
       $('#logTable').html(html);
     });
@@ -349,7 +344,6 @@
     cpu.length = 0;
     mem.length = 0;
     loss.length = 0;
-    lastAnomalySignature = '';
     setCharts();
     loadLogs();
   }

@@ -1,6 +1,7 @@
 # models/diagnosis_model.py
 from sklearn.ensemble import RandomForestClassifier
 import joblib
+import sys
 
 class DiagnosisModel:
     """
@@ -18,7 +19,7 @@ class DiagnosisModel:
         y_train: 故障标签（0, 1, 2, 3）
         """
         self.model.fit(X_train, y_train)
-        print("故障诊断模型训练完成。")
+        sys.stdout.write("Model trained: DiagnosisModel(RandomForest)\n")
 
     def predict(self, feature_data):
         """输入异常特征，输出诊断结论，与 diagnose 方法保持一致以适配 main.py"""

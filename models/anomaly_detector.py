@@ -2,6 +2,14 @@
 from pyod.models.iforest import IForest
 import joblib
 import os
+import sys
+
+
+def _to_ascii(value):
+    try:
+        return str(value).encode("ascii", "backslashreplace").decode("ascii")
+    except Exception:
+        return "<unprintable>"
 
 class AnomalyDetector:
     """
@@ -25,7 +33,7 @@ class AnomalyDetector:
         :param features: 经过预处理的特征矩阵（如 CPU、内存、滑动均值等）
         """
         self.model.fit(features)
-        print("【模型训练】异常检测模型（IForest）训练完成 ")
+        sys.stdout.write("Model trained: IForest\n")
 
     def predict(self, current_feature):
         """
@@ -41,17 +49,17 @@ class AnomalyDetector:
         """保存训练好的模型文件 """
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
         joblib.dump(self.model, model_path)
-        print(f"模型已保存至: {model_path}")
+        sys.stdout.write(f"Model saved: {_to_ascii(model_path)}\n")
 
     def load_model(self, model_path):
         """加载已有的模型 """
         if not os.path.exists(model_path):
-            print(f"模型文件不存在: {model_path}")
+            sys.stdout.write(f"Model file not found: {_to_ascii(model_path)}\n")
             return False
         try:
             self.model = joblib.load(model_path)
-            print("模型加载成功")
+            sys.stdout.write("Model loaded\n")
             return True
         except Exception as e:
-            print(f"加载模型失败: {e}")
+            sys.stdout.write(f"Model load failed: {_to_ascii(e)}\n")
             return False

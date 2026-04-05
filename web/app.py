@@ -12,6 +12,7 @@ import time
 import json
 import os
 import sys
+import configparser
 
 # 导入 InfluxDB 客户端，由于 web/app.py 在子目录，需要把根目录加入系统路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,7 +31,10 @@ DEVICE_MAP = {d["id"]: d["id"] for d in DEVICE_LIST}
 
 @app.route('/')
 def index():
-    return render_template('index.html', devices=DEVICE_LIST)
+    config = configparser.ConfigParser()
+    config.read("config.ini")
+    topology_url = config.get("topology", "url", fallback="http://192.168.17.128:5000/")
+    return render_template('index.html', devices=DEVICE_LIST, topology_url=topology_url)
 
 
 @app.route('/api/metrics')
@@ -39,8 +43,10 @@ def get_metrics():
     device_id = request.args.get('device', default_device)
     target_host = DEVICE_MAP.get(device_id, default_device)
     
-    # 尝试从 InfluxDB 获取真实数据 (增加 host 过滤)
-    real_data = db.query_latest_data(host=target_host)
+    try:
+        real_data = db.query_latest_data(host=target_host)
+    except Exception:
+        real_data = None
     
     if real_data and 'cpu_usage' in real_data:
         cpu_val = real_data.get('cpu_usage', 0)
@@ -49,11 +55,11 @@ def get_metrics():
         bw_in = real_data.get('bandwidth_in_util', 0)
         bw_out = real_data.get('bandwidth_out_util', 0)
         loss = real_data.get('packet_loss_pct', 0)
-        is_anomaly = real_data.get('is_anomaly', 0)
+        is_anomaly = int(real_data.get('is_anomaly', 0) or 0)
         fault_type = real_data.get('fault_type', "正常")
         
         status = "异常" if is_anomaly == 1 else "正常"
-        diagnosis = f"AI判定: {fault_type}"
+        diagnosis = f"判定: {fault_type}"
         suggestion = "建议立即检查设备。" if status == "异常" else "系统运行平稳。"
     else:
         # 更加明显的提示
@@ -63,6 +69,8 @@ def get_metrics():
         bw_in = 0.0
         bw_out = 0.0
         loss = 0.0
+        is_anomaly = 0
+        fault_type = "Normal"
         status = "连接中"
         diagnosis = "数据库尚未接收到数据..."
         suggestion = "请确认 main.py 正在运行且数据库中有记录。"
@@ -156,9 +164,10 @@ def export_report():
 报告生成器版本: v1.0 (AI Ops Engine)
 """
     response = make_response(report_template)
-    response.headers["Content-Disposition"] = f"attachment; filename=Diagnosis_{device}.txt"
+    safe_device = "".join(ch for ch in str(device_id) if ch.isalnum() or ch in ("-", "_")) or "device"
+    response.headers["Content-Disposition"] = f"attachment; filename=Diagnosis_{safe_device}.txt"
     return response
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='127.0.0.1', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5001)

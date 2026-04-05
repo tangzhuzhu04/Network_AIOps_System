@@ -20,26 +20,41 @@ def main():
     config = configparser.ConfigParser()
     config.read('config.ini')
     device_config = config['network_device']
-    use_ai_logic = config.getboolean("pipeline", "use_ai_logic", fallback=True)
+    use_ai_logic = config.getboolean("pipeline", "use_ai_logic", fallback=False)
+    ping_src = config.get("mininet", "ping_src", fallback="pc1")
+    ping_dst = device_config.get("gateway_ip", fallback=None)
 
     collector = NetworkCollector(device_config.get('ip'), 
                                device_config.get('user'), 
                                device_config.get('password'),
+                               gateway_ip=ping_dst,
+                               ping_src=ping_src,
                                use_ai_logic=use_ai_logic)
     
-    # 定义多个模拟设备 IP
+    # Mininet 节点
     virtual_devices = [
-        {"ip": "192.168.1.1", "name": "Huawei-S5700"},
-        {"ip": "192.168.1.2", "name": "H3C-S5130"},
-        {"ip": "192.168.1.3", "name": "Home-Router"}
+        {"id": "s1", "name": "Core-Switch"},
+        {"id": "s2", "name": "Office-Access"},
+        {"id": "s3", "name": "Server-Access"},
     ]
-    collectors = [NetworkCollector(d['ip'], "admin", "pass", use_ai_logic=use_ai_logic) for d in virtual_devices]
+    collectors = [
+        NetworkCollector(
+            d["id"],
+            device_config.get("user"),
+            device_config.get("password"),
+            gateway_ip=ping_dst,
+            ping_src=ping_src,
+            use_ai_logic=use_ai_logic,
+        )
+        for d in virtual_devices
+    ]
     
     db = InfluxDBClient()
     detector = AnomalyDetector()
     diagnoser = DiagnosisModel()
     # 每个设备单独维护特征提取器，避免设备之间相互影响
     extractor_map = {}
+    consecutive_anomaly = {}
 
     # 尝试加载已有模型，若无则使用模拟数据训练（实际应用中应从文件加载）
     model_path = 'saved_models/iforest.pkl'
@@ -73,9 +88,6 @@ def main():
                             f"Device {collector.ip} raw metrics -> CPU:{raw_data['cpu']} MEM:{raw_data['mem']} "
                             f"DELAY:{delay_val} BW_IN:{bw_in} BW_OUT:{bw_out} LOSS:{loss}"
                         )
-                        if is_anomaly:
-                            logging.warning(f"Device {collector.ip} Anomaly! Baseline Triggered: {fault_type}")
-                            collector.auto_diagnose(fault_type)
                     else:
                         # 2. 特征工程：生成滑动窗口统计特征
                         if collector.ip not in extractor_map:
@@ -119,6 +131,20 @@ def main():
                         if is_anomaly:
                             fault_type = rule_fault or diagnoser.predict(feature_array)[0]
                             logging.warning(f"Device {collector.ip} Anomaly! Predicted: {fault_type}")
+
+                    key = collector.ip
+                    cnt = consecutive_anomaly.get(key, 0)
+                    if int(is_anomaly) == 1:
+                        cnt += 1
+                    else:
+                        cnt = 0
+                    consecutive_anomaly[key] = cnt
+
+                    effective_is_anomaly = 1 if cnt >= 2 else 0
+                    if effective_is_anomaly == 0:
+                        fault_type = "Normal"
+                    else:
+                        if cnt == 2:
                             collector.auto_diagnose(fault_type)
 
                     # 5. 存储全量数据
@@ -126,7 +152,7 @@ def main():
                         raw_data["cpu"],
                         raw_data["mem"],
                         delay_val,
-                        int(is_anomaly),
+                        int(effective_is_anomaly),
                         fault_type,
                         host=collector.ip,
                         bandwidth_in_util=bw_in,
@@ -134,7 +160,7 @@ def main():
                         packet_loss_pct=loss,
                     )
                     logging.info(
-                        f"Device {collector.ip} write -> CPU:{raw_data['cpu']} is_anomaly:{int(is_anomaly)} "
+                        f"Device {collector.ip} write -> CPU:{raw_data['cpu']} is_anomaly:{int(effective_is_anomaly)} "
                         f"fault:{fault_type} BW_IN:{bw_in} BW_OUT:{bw_out} LOSS:{loss}"
                     )
 
